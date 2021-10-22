@@ -1,19 +1,21 @@
 # Python implementation of Picol (small Tcl interpreter)
 
 # *** Enums ***
+import sys
+
 PICOL_OK       = 0
 PICOL_ERR      = 1
 PICOL_RETURN   = 2
 PICOL_BREAK    = 3
 PICOL_CONTINUE = 4
 
-PT_ESC = 7
-PT_STR = 8
-PT_CMD = 9
-PT_VAR = 10
-PT_SEP = 11
-PT_EOL = 12
-PT_EOF = 13
+PT_ESC = 5  # was 7
+PT_STR = 6  # was 8
+PT_CMD = 7  # was 9
+PT_VAR = 8  # was 10
+PT_SEP = 9  # was 11
+PT_EOL = 10  # was 12
+PT_EOF = 11  # was 13
 
 
 class PicolParser:
@@ -61,6 +63,9 @@ class PicolInterp:
     #     self.result = result
     pass
 
+# Adding this to emulate a goto in the original C code
+class Err(BaseException):
+    pass
 
 def picolInitParser(p, text):
     p.text = text
@@ -150,7 +155,7 @@ def picolParseVar(p):
 
 
 def picolParseBrace(p):
-    level = 3
+    level = 1
     p.p += 1
     p.start = p.p
     p.len -= 1
@@ -161,8 +166,7 @@ def picolParseBrace(p):
         elif p.len == 0 or p.text[p.p] == '}':
             level -= 1
             if level == 0 or p.len == 0:
-                p.p -= 1
-                p.end = p.p
+                p.end = p.p - 1
                 if p.len:
                     p.p += 1
                     p.len -= 1
@@ -229,6 +233,7 @@ def picolGetToken(p):
                 p.type = PT_EOL
             else:
                 p.type = PT_EOF
+            return PICOL_OK
         if p.text[p.p] == ' ' or p.text[p.p] == '\t' or p.text[p.p] == '\r':
             if p.insidequote:
                 return picolParseString(p)
@@ -298,7 +303,7 @@ def picolGetCommand(i, name):
 def picolRegisterCommand(i, name, f, privdata):
     c = picolGetCommand(i, name)
     if c:
-        error_message = "Command '%s' already defined".format(name)
+        error_message = "Command '{}' already defined".format(name)
         picolSetResult(i, error_message)
     c = PicolCmd()
     c.name = name
@@ -309,11 +314,138 @@ def picolRegisterCommand(i, name, f, privdata):
     return PICOL_OK
 
 
+# * EVAL *
+def picolEval(i, t):
+    p = PicolParser()
+    argc = 0
+    # j is not needed yet
+    # errbuf not needed
+    argv = [] # Was None
+    retcode = PICOL_OK
+    picolSetResult(i, "")
+    picolInitParser(p, t)
+    try:
+        while True:
+            # t declaration not needed yet
+            # tlen delcaration not needed yet
+            prevtype = p.type
+            picolGetToken(p)
+            if p.type == PT_EOF:
+                break
+            tlen = p.end - p.start + 1
+            if tlen < 0: tlen = 0
+            t = p.text[p.start:p.start + tlen]
+            # don't think I need to do t[tlen] = '\0'
+            if p.type == PT_VAR:
+                v = picolGetVar(i, t)
+                if not v:
+                    errormsg = "No such variable '{}'".format(t)
+                    # Don't think I need the equivalent of free(t)
+                    picolSetResult(i, errormsg)
+                    retcode = PICOL_ERR;
+                    raise Err
+                t = v.val
+            elif p.type == PT_CMD:
+                retcode = picolEval(i, t)
+                if retcode != PICOL_OK: raise Err
+                t = i.result
+            elif p.type == PT_ESC:
+                pass    # !!! escape handling missing */
+            elif p.type == PT_SEP:
+                prevtype = p.type
+                continue
+
+            # We have a complete command + args. Call it!
+            if p.type == PT_EOL:
+                c = PicolCmd()
+                prevtype = p.type
+                if argc:
+                    c = picolGetCommand(i, argv[0])
+                    if not c:
+                        errormsg = "No such command '{}'".format(argv[0])
+                        picolSetResult(i, errormsg)
+                        retcode = PICOL_ERR
+                        raise Err
+                    retcode = c.func(i, argc, argv, c.privdata)
+                    if retcode != PICOL_OK: raise Err
+                # Prepare for the next command
+                for j in range(0, argc):
+                    argv[j] = None
+                argv = None
+                argc = 0
+                continue
+
+            # We have a new token, append to the previous or as new arg?
+            if prevtype == PT_SEP or prevtype == PT_EOL:
+                # argv = []
+                # below was: argv[argc] = t
+                argv.append(t)
+                argc += 1
+            else:  # Interpolation
+                oldlen = len(argv[argc-1])
+                tlen = len(t)
+                # below was: argv[argc - 1] += t
+                argv.append(t)
+
+            prevtype = p.type
+
+    except Err:
+        return retcode
 
 
+# * Actual Commands *
+
+def picolArityErr(i, name):
+    errormsg = "Wrong number of args for {}".format(name)
+    picolSetResult(i, errormsg)
+    return PICOL_ERR
 
 
+def picolCommandMath(i, argc, argv, pd):
+    # buf, a, b, c = None, None, None, None
+    if argc != 3: return picolArityErr(i, argv[0])
+    a = int(argv[1]) ; b = int(argv[2])
+    if argv[0][0] == '+': c = a + b
+    elif argv[0][0] == '-': c = a - b
+    elif argv[0][0] == '*': c = a * b
+    elif argv[0][0] == '/': c = a // b
+    elif argv[0][0] == '>' and argv[0][1] == '': c = a > b
+    elif argv[0][0] == '>' and argv[0][1] == '=': c = a >= b
+    elif argv[0][0] == '<' and argv[0][1] == '': c = a < b
+    elif argv[0][0] == '<' and argv[0][1] == '=': c = a <= b
+    elif argv[0][0] == '=' and argv[0][1] == '=': c = a == b
+    elif argv[0][0] == '!' and argv[0][1] == '=': c = a != b
+    else: c = 0 # prevent warnings in original code?
+    buf = c
+    picolSetResult(i, buf)
+    return PICOL_OK
 
+def picolCommandPuts(i, argc, argv, pd):
+    if argc != 2:
+        return picolArityErr(i, argv[0])
+    print("{}".format(argv[1]))
+    return PICOL_OK
+
+
+def picolRegisterCoreCommands(i):
+    name = ["+", "-", "*", "/", ">", ">=", "<", "<=", "==", "!"]
+    for j in name:
+        picolRegisterCommand(i, j, picolCommandMath, None)
+    picolRegisterCommand(i, "puts", picolCommandPuts, None)
+
+
+if __name__ == '__main__':
+    interp = PicolInterp()
+    picolInitInterp(interp)
+    picolRegisterCoreCommands(interp)
+    while True:
+        clibuf = input("picol> ")
+        if clibuf == None:
+            sys.exit()
+        retcode = picolEval(interp, clibuf)
+        if interp.result != "":
+            print("[{}] {}".format(retcode, interp.result))
+    sys.exit()
 
 
 
