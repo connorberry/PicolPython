@@ -1,5 +1,6 @@
 ### This file is obsolete - look at new_picol.py for the a complete (working) example
 ### This file has subtle errors during runtime.
+### Please see new_picol.py for license terms
 
 # Python implementation of Picol (small Tcl interpreter)
 
