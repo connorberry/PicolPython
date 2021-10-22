@@ -24,6 +24,10 @@
 #  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 #  * POSSIBILITY OF SUCH DAMAGE.
 #  */
+
+# Python Code translation copyright Connor Berry (connorberry@yahoo.com) 2021
+# available under the same license terms as the above license for the original C code.
+
 # #include <stdio.h>
 # #include <stdlib.h>
 # #include <string.h>
